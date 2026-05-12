@@ -13,7 +13,7 @@ namespace Mappy.MapPacks
     {
         public string Name { get; init; } = string.Empty;
 
-
+ 
         public Stream UpkStream { get; init; } = Stream.Null;
 
 
@@ -21,6 +21,18 @@ namespace Mappy.MapPacks
 
 
         public string? Description { get; init; }
+
+
+        public string? Creator { get; init; }
+
+
+        public string? Version { get; init; }
+
+
+        public string? InfoText { get; init; }
+
+
+        public string? DownloadUrl { get; init; }
     }
 }
 
