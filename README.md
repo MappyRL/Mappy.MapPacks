@@ -3,19 +3,35 @@
 `Mappy.MapPacks` is the plugin-based map loading system used by the game.
 It allows maps to be bundled into standalone assemblies and discovered dynamically at runtime.
 
-A map pack exposes one or more maps through the `IMappyMapPack` interface, returning `MappyPackedMap` objects that contain the playable map data and optional metadata.
+This version documents the changes made from the original `Pack.cs` implementation to the newer `PackV1.cs` implementation.
+
+The newer implementation improves:
+
+* Automatic map discovery
+* Embedded `.upk` loading
+* `.upk.gz` compression support
+* Metadata parsing
+* Offline support
+* Scalability
 
 ---
 
 # How It Works
 
-The system works by:
+The original implementation worked by:
 
 1. Creating a class library project
 2. Referencing `Mappy.MapPacks`
 3. Implementing `IMappyMapPack`
-4. Embedding map resources into the assembly
-5. Returning those resources as `MappyPackedMap` objects
+4. Embedding `.upk` files directly into the assembly
+5. Returning embedded streams directly
+
+The newer `Pack.cs` implementation changed this flow to:
+
+1. Manually registering maps in a dictionary
+2. Downloading `.upk` files externally from GitHub Releases
+3. Loading metadata and images from embedded resources
+4. Returning a `DownloadUrl` instead of an embedded `UpkStream`
 
 The game then loads the assembly and reads all maps exposed by the pack.
 
@@ -48,6 +64,12 @@ public sealed class MappyPackedMap
     public Stream? ImagePngStream { get; init; }
 
     public string? Description { get; init; }
+
+    public string? Creator { get; init; }
+
+    public string? Version { get; init; }
+
+    public string? InfoText { get; init; }
 }
 ```
 
@@ -59,33 +81,128 @@ public sealed class MappyPackedMap
 | `UpkStream`      | Required `.upk` map file stream |
 | `ImagePngStream` | Optional preview image          |
 | `Description`    | Optional text description       |
+| `Creator`        | Parsed creator metadata         |
+| `Version`        | Parsed version metadata         |
+| `InfoText`       | Full raw metadata text          |
+
+---
+
+# Original `Pack.cs`
+
+The original implementation dynamically discovered embedded map resources directly from the assembly.
+
+Maps were loaded through:
+
+```csharp
+var resources = asm.GetManifestResourceNames();
+```
+
+The original system embedded `.upk` files directly inside the assembly.
+
+## Original System Characteristics
+
+| Feature             | Original `Pack.cs` |
+| ------------------- | ------------------ |
+| Map Registration    | Automatic          |
+| UPK Loading         | Embedded Resource  |
+| Compression Support | Yes (`.upk.gz`)    |
+| Metadata Parsing    | Dynamic            |
+| Version Support     | Yes                |
+| Offline Support     | Full               |
+| Scalability         | High               |
+
+---
+
+# New GitHub Download Version
+
+The newer implementation manually registers maps and downloads them externally from GitHub Releases.
+
+## GitHub Download System
+
+Instead of embedding `.upk` files directly into the assembly, the newer implementation stores GitHub download links:
+
+```csharp
+private static readonly Dictionary<string, string> MapUrls = new()
+```
+
+Example:
+
+```csharp
+["Aim training"] = "https://github.com/.../Aim_training.upk"
+```
+
+Maps are returned with:
+
+```csharp
+DownloadUrl = MapUrls[mapName]
+```
+
+And:
+
+```csharp
+UpkStream = null
+```
+
+This means maps are downloaded externally rather than loaded from embedded resources.
 
 ---
 
 # Pack Structure
 
-The template pack automatically discovers embedded resources using a folder convention.
+The original `PackV1.cs` implementation automatically discovered embedded resources using a folder convention.
 
-## Expected Structure
+## Original Expected Structure
 
 ```text
 Maps/
  ├── MyMap/
  │    ├── MyMap.upk
  │    ├── Image.png
- │    └── description.txt
+ │    ├── description.txt
+ │    └── info.txt
  │
  ├── AnotherMap/
- │    ├── AnotherMap.upk
+ │    ├── AnotherMap.upk.gz
  │    ├── Image.png
- │    └── description.txt
+ │    ├── description.txt
+ │    └── info.txt
 ```
+
+In the newer `Pack.cs` implementation, `.upk` files are no longer required inside the assembly.
+
+Only metadata resources such as:
+
+* `Image.png`
+* `description.txt`
+* `info.txt`
+
+need to exist locally.
+
+The actual map files are downloaded externally through GitHub Releases using:
+
+```csharp
+DownloadUrl = MapUrls[mapName]
+```
+
+This means the pack assembly no longer needs to contain:
+
+```text
+<MapName>.upk
+```
+
+or:
+
+```text
+<MapName>.upk.gz
+```
+
+resources.
 
 ---
 
 # Resource Discovery
 
-The template loader scans all embedded resources and groups them by the folder directly under `Maps`.
+The original `PackV1.cs` implementation scanned all embedded resources and grouped them by the folder directly under `Maps`.
 
 Example resource names:
 
@@ -93,21 +210,56 @@ Example resource names:
 Mappy.PackTemplate.Maps.MyMap.MyMap.upk
 Mappy.PackTemplate.Maps.MyMap.Image.png
 Mappy.PackTemplate.Maps.MyMap.description.txt
+Mappy.PackTemplate.Maps.MyMap.info.txt
 ```
 
-The group name (`MyMap`) becomes the map name exposed to the game.
+The group name (`MyMap`) became the map name exposed to the game.
+
+The newer `Pack.cs` implementation no longer relies on `.upk` resource discovery.
+
+Instead, maps are registered manually:
+
+```csharp
+private static readonly Dictionary<string, string> MapUrls = new()
+```
+
+The map name is now determined directly from the dictionary key rather than folder grouping.
 
 ---
 
 # Required Files
 
-## `.upk`
+## `.upk` or `.upk.gz`
 
-Required.
+In the original `Pack.cs` implementation, these files were required because maps were embedded directly into the DLL assembly as embedded resources.
 
-This is the actual playable map package.
+Every `.upk` file had to exist inside the project and be compiled into the DLL itself.
 
-If no `.upk` file exists for a map group, the map is ignored.
+Example:
+
+```text
+Maps/MyMap/MyMap.upk
+```
+
+This meant the final DLL physically contained all map files.
+
+The newer `Pack.cs` implementation no longer requires embedded `.upk` files.
+
+Instead, maps are downloaded externally from GitHub Releases.
+
+Example:
+
+```csharp
+["Aim training"] = "https://github.com/.../Aim_training.upk"
+```
+
+This means `.upk` resources no longer need to exist inside:
+
+```text
+Maps/<MapName>/
+```
+
+folders.
 
 ---
 
@@ -137,23 +289,79 @@ description.txt
 
 ---
 
+## `info.txt`
+
+Optional metadata file.
+
+Used for:
+
+* Creator
+* Version
+* Additional metadata
+
+Supported formats:
+
+```text
+creator = Example
+version = 1.0
+```
+
+Also supports:
+
+```text
+creator: Example
+version: 1.0
+```
+
+And:
+
+```text
+creator Example
+version 1.0
+```
+
+---
+
+# Metadata Parsing
+
+The newer implementation parses metadata dynamically.
+
+Example:
+
+```csharp
+if (key.Equals("creator", StringComparison.OrdinalIgnoreCase))
+    creator = value;
+else if (key.Equals("version", StringComparison.OrdinalIgnoreCase))
+    version = value;
+```
+
+Supported separators:
+
+* `=`
+* `:`
+* `-`
+* Space fallback
+
+---
+
 # Example Implementation
 
 ```csharp
+using System;
 using System.Collections.Generic;
+using System.IO.Compression;
 using System.IO;
 using System.Linq;
 using System.Reflection;
 using Mappy.MapPacks;
 
-namespace MyMapPack
+namespace Mappy.PackTemplate
 {
     public sealed class Pack : IMappyMapPack
     {
         public IEnumerable<MappyPackedMap> GetMaps()
         {
             var asm = Assembly.GetExecutingAssembly();
-
             var resources = asm.GetManifestResourceNames();
 
             var mapGroups = resources
@@ -173,44 +381,36 @@ namespace MyMapPack
                 var mapName = group.Key;
 
                 var upkRes = group.FirstOrDefault(r =>
-                    r.EndsWith(".upk", System.StringComparison.OrdinalIgnoreCase));
+                    r.EndsWith(".upk", StringComparison.OrdinalIgnoreCase) ||
+                    r.EndsWith(".upk.gz", StringComparison.OrdinalIgnoreCase));
 
                 if (upkRes == null)
                     continue;
 
-                var imgRes = group.FirstOrDefault(r =>
-                    r.EndsWith(".Image.png", System.StringComparison.OrdinalIgnoreCase));
+                var upkSourceStream = asm.GetManifestResourceStream(upkRes);
 
-                var descRes = group.FirstOrDefault(r =>
-                    r.EndsWith(".description.txt", System.StringComparison.OrdinalIgnoreCase));
+                Stream? upkStream = upkSourceStream;
 
-                var upkStream = asm.GetManifestResourceStream(upkRes);
+                if (upkSourceStream != null &&
+                    upkRes.EndsWith(".upk.gz", StringComparison.OrdinalIgnoreCase))
+                {
+                    using var gzip = new GZipStream(upkSourceStream, CompressionMode.Decompress);
+
+                    var decompressed = new MemoryStream();
+
+                    gzip.CopyTo(decompressed);
+                    decompressed.Position = 0;
+
+                    upkStream = decompressed;
+                }
 
                 if (upkStream == null)
                     continue;
 
-                Stream? imgStream = null;
-
-                if (imgRes != null)
-                    imgStream = asm.GetManifestResourceStream(imgRes);
-
-                string? description = null;
-
-                if (descRes != null)
-                {
-                    using var s = asm.GetManifestResourceStream(descRes);
-
-                    if (s != null)
-                    using (var reader = new StreamReader(s))
-                        description = reader.ReadToEnd();
-                }
-
                 yield return new MappyPackedMap
                 {
                     Name = mapName,
-                    UpkStream = upkStream,
-                    ImagePngStream = imgStream,
-                    Description = description
+                    UpkStream = upkStream
                 };
             }
         }
@@ -247,8 +447,11 @@ At runtime:
 1. The game loads the map pack assembly
 2. Searches for implementations of `IMappyMapPack`
 3. Calls `GetMaps()`
-4. Reads all returned `MappyPackedMap` objects
-5. Loads the `.upk` streams into the game
+4. Scans embedded resources automatically
+5. Groups maps dynamically
+6. Decompresses `.upk.gz` files if needed
+7. Reads all returned `MappyPackedMap` objects
+8. Loads the `.upk` streams into the game
 
 ---
 
@@ -258,38 +461,64 @@ At runtime:
 * Multiple maps can exist inside a single pack
 * Missing images/descriptions are allowed
 * Missing `.upk` files cause the map to be skipped
+* `.upk.gz` files are supported
+* Metadata parsing is flexible
 * Streams are loaded directly from assembly resources
+* External GitHub downloads are no longer required
 
 ---
 
 # Recommended Naming
 
-For consistency:
+## Original `Pack.cs`
 
 ```text
 Maps/<MapName>/<MapName>.upk
 Maps/<MapName>/Image.png
 Maps/<MapName>/description.txt
+Maps/<MapName>/info.txt
 ```
 
-Example:
+Compressed maps:
 
 ```text
-Maps/DM-Deck/DM-Deck.upk
-Maps/DM-Deck/Image.png
-Maps/DM-Deck/description.txt
+Maps/<MapName>/<MapName>.upk.gz
 ```
+
+## New `Pack.cs`
+
+Only metadata resources are required locally:
+
+```text
+Maps/<MapName>/Image.png
+Maps/<MapName>/description.txt
+Maps/<MapName>/info.txt
+```
+
+The actual `.upk` file is hosted externally on GitHub Releases.
 
 ---
 
 # Summary
 
-`Mappy.MapPacks` provides a lightweight and flexible way to package maps as self-contained assemblies.
+The transition from the original embedded `Pack.cs` system to the newer GitHub download version changed the map loading architecture significantly.
 
-Each pack:
+The original implementation:
 
-* Implements `IMappyMapPack`
-* Embeds map resources
-* Returns playable map definitions through `GetMaps()`
+* Automatically discovered maps
+* Required `.upk` files to be embedded directly into the DLL
+* Loaded maps from assembly resources
+* Supported `.upk.gz` compression
+* Parsed metadata dynamically
+* Worked fully offline
 
-This makes map distribution simple, portable, and easy for the game to load dynamically.
+The newer implementation:
+
+* Uses manual map registration
+* Downloads maps externally from GitHub Releases
+* No longer requires `.upk` files inside the DLL
+* Keeps the DLL significantly smaller
+* Stores only metadata/images inside the assembly
+* Returns `DownloadUrl` instead of embedded `UpkStream`
+
+This reduces assembly size and allows maps to be updated remotely without rebuilding the pack, but introduces a dependency on external downloads and GitHub availability.
